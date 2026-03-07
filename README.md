@@ -1,8 +1,8 @@
 # domains.sh
 
-A fast, zero-dependency shell script that checks domain availability via WHOIS and shows **registration & renewal pricing** (based on Moniker.com prices as of 2026-03-07).
-
 You no longer have to deal with walls of text when checking domains. This script will check the domains you provide and give you a clean, concise output of the results.
+
+A fast, zero-dependency shell script that checks domain availability via WHOIS and shows **registration & renewal pricing** (based on Moniker.com prices as of 2026-03-07).
 
 Output is **compact by default** — one line per domain. Pass `-e` for full verbose details.
 
