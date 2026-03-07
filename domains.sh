@@ -2,6 +2,20 @@
 # domains.sh — Check domain availability with pricing info
 # Usage: ./domains.sh <domain> [-e] [-f]
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── CONFIGURATION ────────────────────────────────────────────────────────────
+# Default TLDs pre-filled when using the -e (extend) option.
+# Add or remove entries to suit your needs — one TLD per line.
+# ══════════════════════════════════════════════════════════════════════════════
+DEFAULT_TLDS=(
+    .com
+    .ai
+    .io
+    .co
+    .app
+    .dev
+)
+
 # ── Colours ──────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -700,6 +714,7 @@ is_valid_tld() {
 check_domain() {
     local domain="$1"
     local show_full="$2"  # "true" or ""
+    local extended="$3"   # "true" = verbose; default (empty) = compact
 
     # Ensure whois is installed
     if ! command -v whois &>/dev/null; then
@@ -725,18 +740,30 @@ check_domain() {
         local pricing
         pricing=$(get_pricing "$domain")
 
-        echo -e "${GREEN}✅ AVAILABLE:${NC} ${domain}"
-
-        if [[ -n "$pricing" ]]; then
-            local reg renew
-            reg=$(echo "$pricing" | cut -d'|' -f2)
-            renew=$(echo "$pricing" | cut -d'|' -f3)
-            echo -e "   ${GREEN}1st Year:${NC} $reg"
-            echo -e "   ${GREEN}Renewal:${NC} $renew"
-            # Strip non-numeric chars (comma, €, spaces) and return raw number via stdout
-            echo "$reg" | tr -d ',€ '
+        if [[ "$extended" == "true" ]]; then
+            if [[ -n "$pricing" ]]; then
+                local reg renew
+                reg=$(echo "$pricing" | cut -d'|' -f2)
+                renew=$(echo "$pricing" | cut -d'|' -f3)
+                echo -e "${GREEN}✅ AVAILABLE:${NC} ${domain}"
+                echo -e "   ${GREEN}1st Year:${NC} $reg"
+                echo -e "   ${GREEN}Renewal:${NC} $renew"
+                echo "$reg" | tr -d ',€ '
+            else
+                echo -e "${GREEN}✅ AVAILABLE:${NC} ${domain}"
+                echo "0"
+            fi
         else
-            echo "0"
+            if [[ -n "$pricing" ]]; then
+                local reg renew
+                reg=$(echo "$pricing" | cut -d'|' -f2)
+                renew=$(echo "$pricing" | cut -d'|' -f3)
+                echo -e "${GREEN}✅${NC} - ${domain} - ${reg}"
+                echo "$reg" | tr -d ',€ '
+            else
+                echo -e "${GREEN}✅${NC} - ${domain}"
+                echo "0"
+            fi
         fi
 
     elif echo "$output" | grep -qiE "$error_pattern"; then
@@ -744,16 +771,37 @@ check_domain() {
         exit 1
 
     else
-        echo -e "${RED}❌ TAKEN:${NC} ${domain}"
+        if [[ "$extended" != "true" ]]; then
+            echo -e "${RED}❌${NC} - TAKEN: ${domain}"
+        else
+            echo -e "${RED}❌ TAKEN:${NC} ${domain}"
 
-        local registrar updated expiry
-        registrar=$(echo "$output" | grep -iE "^(Registrar|Registrar Name):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
-        updated=$(echo "$output"   | grep -iE "^(Updated Date|last-updated|Modified|Last Updated):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
-        expiry=$(echo "$output"    | grep -iE "^(Registry Expiry Date|Expiration Date|Expiry date|paid-till|Valid Until):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
+            local registrar updated expiry
+            registrar=$(echo "$output" | grep -iE "^(Registrar|Registrar Name):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
+            updated=$(echo "$output"   | grep -iE "^(Updated Date|last-updated|Modified|Last Updated):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
+            expiry=$(echo "$output"    | grep -iE "^(Registry Expiry Date|Expiration Date|Expiry date|paid-till|Valid Until):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
 
-        [[ -n "$registrar" ]] && echo -e "   ${YELLOW}Registrar:${NC} $registrar"
-        [[ -n "$updated"   ]] && echo -e "   ${YELLOW}Last Update:${NC} $updated"
-        [[ -n "$expiry"    ]] && echo -e "   ${YELLOW}Expiration Date:${NC} $expiry"
+            [[ -n "$registrar" ]] && echo -e "   ${YELLOW}Registrar:${NC} $registrar"
+            [[ -n "$updated"   ]] && echo -e "   ${YELLOW}Last Update:${NC} $updated"
+            [[ -n "$expiry"    ]] && echo -e "   ${YELLOW}Expiration Date:${NC} $expiry"
+
+            # DNS records via dig
+            if command -v dig &>/dev/null; then
+                local dig_records
+                dig_records=$(
+                    {
+                        dig "$domain" A     +noall +answer 2>/dev/null
+                        dig "$domain" CNAME +noall +answer 2>/dev/null
+                    } | awk '$4 == "A" || $4 == "CNAME" {
+                        name=$1; sub(/\.$/, "", name);
+                        type=$4;
+                        val=$NF; sub(/\.$/, "", val);
+                        print "   " name " - " type " - " val
+                      }' | sort -u
+                )
+                [[ -n "$dig_records" ]] && echo -e "$dig_records"
+            fi
+        fi
 
         echo "0"
     fi
@@ -761,22 +809,25 @@ check_domain() {
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 usage() {
-    echo "Usage: $(basename "$0") <domain> [-e] [-f]"
-    echo "  -e   Prompt for additional TLDs to check"
+    echo "Usage: $(basename "$0") <domain> [-o] [-e] [-f]"
+    echo "  -o   Prompt for TLD options (pre-filled with defaults from CONFIG)"
+    echo "  -e   Extended output — show full details with spacing (default is compact)"
     echo "  -f   Show full raw whois output"
     exit 1
 }
 
 SHOW_FULL=""
-EXTEND=""
+OPTIONS=""
+EXTENDED=""
 PRIMARY_DOMAIN=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -f|--full)   SHOW_FULL="true" ;;
-        -e|--extend) EXTEND="true" ;;
-        -h|--help)   usage ;;
-        -*)          echo -e "${RED}❗ Error:${NC} Unknown option: $1"; usage ;;
+        -f|--full)     SHOW_FULL="true" ;;
+        -o|--options)  OPTIONS="true" ;;
+        -e|--extended) EXTENDED="true" ;;
+        -h|--help)     usage ;;
+        -*)            echo -e "${RED}❗ Error:${NC} Unknown option: $1"; usage ;;
         *)
             if [[ -z "$PRIMARY_DOMAIN" ]]; then
                 PRIMARY_DOMAIN="$1"
@@ -792,9 +843,15 @@ if [[ -z "$PRIMARY_DOMAIN" ]]; then
     usage
 fi
 
+# -f and -o cannot be used together
+if [[ "$SHOW_FULL" == "true" && "$OPTIONS" == "true" ]]; then
+    echo -e "${RED}⚠️ Error:${NC} The -f/--full option cannot be used alongside the -o/--options option."
+    exit 1
+fi
+
 # -f and -e cannot be used together
-if [[ "$SHOW_FULL" == "true" && "$EXTEND" == "true" ]]; then
-    echo -e "${RED}⚠️ Error:${NC} The -f/--full option cannot be used alongside the -e/--extend option."
+if [[ "$SHOW_FULL" == "true" && "$EXTENDED" == "true" ]]; then
+    echo -e "${RED}⚠️ Error:${NC} The -f/--full option cannot be used alongside the -e/--extended option."
     exit 1
 fi
 
@@ -808,12 +865,28 @@ fi
 # ── Build domain list ─────────────────────────────────────────────────────────
 domains_to_check=("$PRIMARY_DOMAIN")
 
-if [[ "$EXTEND" == "true" ]]; then
+if [[ "$OPTIONS" == "true" ]]; then
     # Trap Ctrl+C gracefully
     trap 'echo -e "\n${RED}Operation cancelled.${NC}"; exit 0' INT
 
-    echo -en "${YELLOW}Enter additional TLDs separated by spaces or commas (e.g. .net .org io): ${NC}"
+    # Build pre-filled default string from CONFIG
+    default_str=""
+    if [[ ${#DEFAULT_TLDS[@]} -gt 0 ]]; then
+        default_str=$(printf "%s " "${DEFAULT_TLDS[@]}")
+        default_str="${default_str% }"  # trim trailing space
+    fi
+
+    echo -e "${YELLOW}Enter additional TLDs (space/comma separated). Press Enter to use defaults.${NC}"
+    if [[ -n "$default_str" ]]; then
+        echo -e "${YELLOW}Defaults:${NC} ${default_str}"
+    fi
+    echo -en "${YELLOW}TLDs: ${NC}"
     read -r user_input
+
+    # If blank, fall back to defaults
+    if [[ -z "${user_input// /}" ]] && [[ -n "$default_str" ]]; then
+        user_input="$default_str"
+    fi
 
     trap - INT  # reset trap
 
@@ -875,7 +948,7 @@ for (( i=0; i<total_domains; i++ )); do
     domain="${domains_to_check[$i]}"
 
     # Capture output — last line is the numeric cost (or 0)
-    raw_output=$(check_domain "$domain" "$SHOW_FULL")
+    raw_output=$(check_domain "$domain" "$SHOW_FULL" "$EXTENDED")
     cost=$(echo "$raw_output" | tail -1)
     display=$(echo "$raw_output" | sed '$d')
 
@@ -886,14 +959,18 @@ for (( i=0; i<total_domains; i++ )); do
 
     # Newline + delay between domains (not after last)
     if (( i < total_domains - 1 )); then
-        echo ""
+        [[ "$EXTENDED" == "true" ]] && echo ""
         sleep "$delay"
     fi
 done
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 if (( $(echo "$total_cost > 0" | bc -l) )); then
-    printf "\n${GREEN}💰 Your potential spend is:${NC} %.2f €\n\n" "$total_cost"
+    if [[ "$EXTENDED" == "true" ]]; then
+        printf "\n${GREEN}💰 Your potential spend is:${NC} %.2f €\n\n" "$total_cost"
+    else
+        printf "${GREEN}💰${NC} - Spend: %.2f €\n" "$total_cost"
+    fi
 else
-    echo ""
+    [[ "$EXTENDED" == "true" ]] && echo ""
 fi

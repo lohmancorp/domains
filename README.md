@@ -2,8 +2,17 @@
 
 A fast, zero-dependency shell script that checks domain availability via WHOIS and shows **registration & renewal pricing** (based on Moniker.com prices as of 2026-03-07).
 
-You no longer have to sort through walls of whois text.
+You no longer have to deal with walls of text when checking domains. This script will check the domains you provide and give you a clean, concise output of the results.
 
+Output is **compact by default** — one line per domain. Pass `-e` for full verbose details.
+
+```
+❌ - TAKEN: taylorgiddens.com
+✅ - taylorgiddens.io - 56.57 €
+💰 - Spend: 56.57 €
+```
+
+With `-e` (extended):
 ```
 ✅ AVAILABLE: taylorgiddens.io
    1st Year: 56.57 €
@@ -13,6 +22,7 @@ You no longer have to sort through walls of whois text.
    Registrar: GoDaddy.com, LLC
    Last Update: 2026-03-03T09:26:49Z
    Expiration Date: 2027-01-18T01:33:08Z
+   taylorgiddens.com - A - 45.141.116.118
 
 💰 Your potential spend is: 56.57 €
 ```
@@ -23,10 +33,11 @@ You no longer have to sort through walls of whois text.
 
 - ✅ Instant availability check via `whois`
 - 💰 Registration & renewal pricing for 654 TLDs
-- 🔎 Registrar, expiry & last-update info for taken domains
-- 🔁 `-e` extend mode — check multiple TLDs interactively
+- 🔎 Registrar, expiry & last-update info for taken domains (extended mode)
+- 🌐 DNS A & CNAME record lookup for taken domains (extended mode)
 - 📋 `-f` full raw WHOIS output
 - 🛡️ TLD validation before sending any requests
+- ⚙️ Configurable default TLD list for the `-o` prompt
 - ⏱️ Built-in rate limiting to avoid WHOIS server blocks
 - 🛑 Hard cap of 20 domains per run
 
@@ -38,6 +49,7 @@ You no longer have to sort through walls of whois text.
 |------|---------|
 | `whois` | See platform instructions below |
 | `bc` | Usually pre-installed (needed for price summing) |
+| `dig` | Usually pre-installed (optional, for DNS lookup on taken domains) |
 | `bash` 4+ | Pre-installed on Linux; see macOS & Windows notes |
 
 ---
@@ -65,17 +77,16 @@ Or download manually from: [github.com/lohmancorp/domains](https://github.com/lo
 
 ```bash
 # 1. Get the script — see 'Get the Script' section above
-#    (git clone or curl download, then cd into the directory)
 
 # 2. Install dependencies
 brew install whois bash
 
 # 3. Copy to your PATH
-sudo cp domains.sh /usr/local/bin/domains
-sudo chmod +x /usr/local/bin/domains
+sudo cp domains.sh /usr/local/bin/domain
+sudo chmod +x /usr/local/bin/domain
 
 # 4. Run from anywhere
-domains example.com
+domain example.com
 ```
 
 > **Note:** macOS ships with an older Bash 3. The `brew install bash` step above upgrades it. If you skip this, run with `bash domains.sh` instead of `./domains.sh`.
@@ -91,11 +102,11 @@ domains example.com
 sudo apt update && sudo apt install -y whois bc
 
 # 3. Copy to your PATH
-sudo cp domains.sh /usr/local/bin/domains
-sudo chmod +x /usr/local/bin/domains
+sudo cp domains.sh /usr/local/bin/domain
+sudo chmod +x /usr/local/bin/domain
 
 # 4. Run from anywhere
-domains example.com
+domain example.com
 ```
 
 ---
@@ -109,11 +120,11 @@ domains example.com
 sudo dnf install -y whois bc
 
 # 3. Copy to your PATH
-sudo cp domains.sh /usr/local/bin/domains
-sudo chmod +x /usr/local/bin/domains
+sudo cp domains.sh /usr/local/bin/domain
+sudo chmod +x /usr/local/bin/domain
 
 # 4. Run from anywhere
-domains example.com
+domain example.com
 ```
 
 ---
@@ -126,9 +137,9 @@ domains example.com
 ```bash
 # Inside WSL
 sudo apt update && sudo apt install -y whois bc
-sudo cp /path/to/domains.sh /usr/local/bin/domains
-sudo chmod +x /usr/local/bin/domains
-domains example.com
+sudo cp /path/to/domains.sh /usr/local/bin/domain
+sudo chmod +x /usr/local/bin/domain
+domain example.com
 ```
 
 ---
@@ -151,27 +162,87 @@ If you prefer Git Bash:
 ## Usage
 
 ```
-domains <domain> [-e] [-f]
+domain <domain> [-o] [-e] [-f]
 ```
 
 | Flag | Description |
 |------|-------------|
-| *(none)* | Check a single domain |
-| `-e` | Prompt for extra TLDs to check against the same base name |
-| `-f` | Show full raw WHOIS output (cannot be combined with `-e`) |
+| *(none)* | Check a single domain — **compact output by default** |
+| `-o` | Prompt for TLD options to check (pre-filled with your configured defaults) |
+| `-e` | Extended output — full details including registrar, dates & DNS records |
+| `-f` | Show full raw WHOIS output (cannot be combined with `-o` or `-e`) |
 
 ### Examples
 
 ```bash
-# Single domain
-domains taylorgiddens.com
+# Single domain — compact output
+domain taylorgiddens.com
 
-# Check multiple TLDs interactively
-domains taylorgiddens.com -e
-# → Enter additional TLDs: net org io app
+# Check multiple TLDs interactively using your default list
+domain taylorgiddens.com -o
 
-# Full WHOIS dump
-domains taylorgiddens.com -f
+# Extended output — shows registrar, expiry dates, DNS A/CNAME records
+domain taylorgiddens.com -e
+
+# Combine: TLD prompt + extended output
+domain taylorgiddens.com -o -e
+
+# Full WHOIS dump for a single domain
+domain taylorgiddens.com -f
+```
+
+---
+
+## Configuration
+
+Near the top of `domains.sh` there is a clearly marked configuration section:
+
+```bash
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+DEFAULT_TLDS=(
+    .com
+    .ai
+    .io
+    .co
+    .app
+    .dev
+)
+```
+
+These TLDs are **pre-filled** when you use the `-o` flag. Press **Enter** to accept them, or type your own to override. Edit this list to suit your preferred TLDs.
+
+---
+
+## Output Formats
+
+### Compact (default)
+
+One line per domain, no spacing:
+
+```
+❌ - TAKEN: taylorgiddens.com
+✅ - taylorgiddens.io - 56.57 €
+💰 - Spend: 56.57 €
+```
+
+### Extended (`-e`)
+
+Full details with spacing between domains, registrar/expiry info, and DNS records for taken domains:
+
+```
+✅ AVAILABLE: taylorgiddens.io
+   1st Year: 56.57 €
+   Renewal:  59.10 €
+
+❌ TAKEN: taylorgiddens.com
+   Registrar: GoDaddy.com, LLC
+   Last Update: 2026-03-03T09:26:49Z
+   Expiration Date: 2027-01-18T01:33:08Z
+   taylorgiddens.com - A - 45.141.116.118
+
+💰 Your potential spend is: 56.57 €
 ```
 
 ---
