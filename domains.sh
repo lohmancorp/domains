@@ -774,7 +774,7 @@ check_domain() {
         if [[ "$extended" != "true" ]]; then
             echo -e "${RED}❌${NC} - TAKEN: ${domain}"
         else
-            echo -e "${RED}❌ TAKEN:${NC} ${domain}"
+            printf '\033[0;31m❌ TAKEN:\033[0m \033]8;;http://%s\a%s\033]8;;\a\n' "$domain" "$domain"
 
             local registrar updated expiry
             registrar=$(echo "$output" | grep -iE "^(Registrar|Registrar Name):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
