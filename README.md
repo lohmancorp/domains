@@ -2,6 +2,8 @@
 
 A fast, zero-dependency shell script that checks domain availability via WHOIS and shows **registration & renewal pricing** (based on Moniker.com prices as of 2026-03-07).
 
+You no longer have to sort through walls of whois text.
+
 ```
 ✅ AVAILABLE: taylorgiddens.io
    1st Year: 56.57 €
