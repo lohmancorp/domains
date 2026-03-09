@@ -465,6 +465,28 @@ do_update() {
         exit 1
     fi
 
+    # ── Check remote version before downloading ───────────────────────────
+    echo -en "   Checking remote version... "
+    local remote_ver
+    remote_ver=$(curl -fsSL --range 0-512 "$repo_url" 2>/dev/null | grep -m1 '^VERSION=' | cut -d'"' -f2)
+
+    if [[ -z "$remote_ver" ]]; then
+        echo -e "${YELLOW}(could not determine remote version)${NC}"
+    elif [[ "$remote_ver" == "$VERSION" ]]; then
+        echo -e "${GREEN}v${remote_ver}${NC}"
+        echo ""
+        echo -e "   ${YELLOW}ℹ️  Already up to date (v${VERSION}).${NC}"
+        echo -en "   Download and reinstall anyway? [y/N]: "
+        read -r _force_update
+        if [[ ! "$_force_update" =~ ^[Yy]$ ]]; then
+            echo -e "   No changes made."
+            exit 0
+        fi
+    else
+        echo -e "${GREEN}v${remote_ver}${NC}  (you have v${VERSION})"
+    fi
+    echo ""
+
     # Download to a temp file
     local tmpfile; tmpfile=$(mktemp /tmp/domains_update_XXXXXX.sh)
     echo -en "   Downloading latest version... "
@@ -478,6 +500,7 @@ do_update() {
         exit 1
     fi
     echo -e "${GREEN}done.${NC}"
+
 
     # Verify it looks like a valid bash script
     if ! bash -n "$tmpfile" 2>/dev/null; then
