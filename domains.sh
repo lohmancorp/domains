@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# domains.sh — Check domain availability with pricing info
-# Usage: ./domains.sh <domain> [-e] [-f]
+# domains — Check domain availability with pricing info and provides registration info if a domain is taken.
+# Usage: ./domains.sh <domain> [-o] [-e]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 # Default TLDs pre-filled when using the -e (extend) option.
+# Edit here to change your default domains to search for.
 # Add or remove entries to suit your needs — one TLD per line.
+# Ensure you keep the same formating, tabs, etc.
 # ══════════════════════════════════════════════════════════════════════════════
 DEFAULT_TLDS=(
     .com
@@ -16,11 +18,506 @@ DEFAULT_TLDS=(
     .dev
 )
 
+# ── Personal config file ──────────────────────────────────────────────────────
+# Stores per-user settings: DEFAULT_TLDS, PRICING_FILE, SETUP_DONE.
+# Created automatically by --install or on first run.
+CONFIG_FILE="${DOMAINS_CONFIG_FILE:-$HOME/.config/domains/config}"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+
+# ── External pricing file (optional) ─────────────────────────────────────────
+# Uncomment PRICING_FILE and set the path to load pricing from an external file
+# instead of the built-in data below. The file must have 3 columns in this order:
+#
+#   Column 1 — TLD / domain extension
+#     The name does not matter, only the column order.
+#     May include or omit the leading dot:  .com  or  com
+#
+#   Column 2 — Registration price
+#     Currency symbol is optional and can appear anywhere:
+#     $12.00  |  $ 12.00  |  12.00 $  |  12.00$  |  12.00
+#     Any non-numeric character (except . and ,) is stripped automatically.
+#
+#   Column 3 — Renewal price  (same format rules as column 2)
+#
+# The first row is always treated as a header and is skipped automatically.
+# The file can use two layouts:
+#
+#   Layout A — Simple (one row per TLD):
+#     TLD, Registration price, Renewal price
+#
+#   Layout B — Operation rows (multiple rows per TLD):
+#     TLD, [optional: Years], Operation, Price, ...
+#     Where Operation values include:  create / register  → registration price
+#                                      renew / renewal    → renewal price
+#     Extra columns (tiers, promo prices, etc.) are ignored.
+#
+# Supported file formats:
+#   • Comma-separated CSV  (.csv)
+#   • Tab-delimited        (.tsv or .csv containing tabs)
+#
+# Default paths per OS (uncomment ONE line and adjust as needed):
+#   macOS:   # PRICING_FILE="$HOME/Documents/pricing.csv"
+#   Linux:   # PRICING_FILE="$HOME/pricing.csv"
+#   Windows: # PRICING_FILE="/mnt/c/Users/$USER/Documents/pricing.csv"
+#
+# To enable: uncomment and set the path:
+# PRICING_FILE=""
+
 # ── Colours ──────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── SETUP HELPERS ────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Detect operating system ───────────────────────────────────────────────────
+detect_os() {
+    case "$(uname -s 2>/dev/null)" in
+        Darwin)  echo "macos" ;;
+        Linux)
+            if grep -qi microsoft /proc/version 2>/dev/null; then
+                echo "wsl"
+            else
+                echo "linux"
+            fi ;;
+        MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+
+# ── Interactive setup wizard ──────────────────────────────────────────────────
+run_setup() {
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+
+    echo ""
+    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}   domains.sh — Setup Wizard${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+    echo ""
+
+    # ── Step 1: Default TLDs ──────────────────────────────────────────────
+    echo -e "${YELLOW}Step 1/2 — Default TLDs${NC}"
+    echo -e "These TLDs are pre-filled when you use the ${GREEN}-o${NC} option."
+    echo ""
+    local cur_tlds; cur_tlds=$(printf "%s " "${DEFAULT_TLDS[@]}")
+    echo -e "Current defaults: ${GREEN}${cur_tlds% }${NC}"
+    echo -e "Enter TLDs (space/comma separated), or press Enter to keep current:"
+    echo -en "${YELLOW}TLDs: ${NC}"
+    read -r _tld_input
+
+    local new_tlds=()
+    if [[ -z "${_tld_input// /}" ]]; then
+        new_tlds=("${DEFAULT_TLDS[@]}")
+    else
+        _tld_input="${_tld_input//,/ }"
+        for _t in $_tld_input; do
+            _t="${_t#.}"
+            [[ -n "$_t" ]] && new_tlds+=(".${_t}")
+        done
+        [[ ${#new_tlds[@]} -eq 0 ]] && new_tlds=("${DEFAULT_TLDS[@]}")
+    fi
+
+    # ── Step 2: Pricing file ──────────────────────────────────────────────
+    echo ""
+    echo -e "${YELLOW}Step 2/2 — Pricing File (optional)${NC}"
+    echo -e "Load pricing from a CSV or TSV file instead of built-in data."
+    echo ""
+
+    # Show current state so the user knows what is active
+    if [[ -n "${PRICING_FILE:-}" ]]; then
+        echo -e "   Currently using: ${GREEN}${PRICING_FILE}${NC}"
+        echo -e "   Enter a new path, type ${YELLOW}none${NC} to revert to built-in pricing, or press Enter to keep current."
+    else
+        echo -e "   Currently using: ${GREEN}built-in pricing data${NC}"
+        echo -e "   Enter a file path to use external pricing, or press Enter to keep built-in."
+    fi
+    echo -en "${YELLOW}Path to pricing file: ${NC}"
+    read -r _pricing_input
+    _pricing_input="${_pricing_input# }"
+    _pricing_input="${_pricing_input% }"
+    case "$_pricing_input" in
+        "~")   _pricing_input="$HOME" ;;
+        "~/"*) _pricing_input="$HOME/${_pricing_input:2}" ;;
+    esac
+
+    local pricing_line='# PRICING_FILE=""'
+
+    local _pricmp; _pricmp=$(echo "$_pricing_input" | tr '[:upper:]' '[:lower:]')
+    if [[ "$_pricmp" == "none" ]]; then
+        # Explicit reset to built-in
+        echo -e "   ${GREEN}✅ Pricing file cleared — built-in data will be used.${NC}"
+        pricing_line='# PRICING_FILE=""'
+
+    elif [[ -z "$_pricing_input" ]]; then
+        # Keep existing setting — validate if there is one
+        if [[ -n "${PRICING_FILE:-}" ]]; then
+            pricing_line="PRICING_FILE=\"${PRICING_FILE}\""
+            if [[ -f "${PRICING_FILE}" ]]; then
+                echo -e "   Validating current file structure..."
+                local _kpext; _kpext="$(echo "${PRICING_FILE##*.}" | tr '[:upper:]' '[:lower:]')"
+                local _kfirst _kdelim=',' _kcount
+                case "$_kpext" in
+                    csv|tsv)
+                        _kfirst=$(tail -n +2 "${PRICING_FILE}" | head -1)
+                        [[ "$_kfirst" == *$'\t'* ]] && _kdelim=$'\t'
+                        _kcount=$(echo "$_kfirst" | awk -F"$_kdelim" '{print NF}')
+                        if (( _kcount < 3 )); then
+                            echo -e "   ${RED}❗ Warning: current file may be invalid — only ${_kcount} column(s) found.${NC}"
+                            echo -e "   Expected columns: ${YELLOW}TLD | Registration price | Renewal price${NC}"
+                        else
+                            echo -e "   ${GREEN}✅ File structure looks good.${NC}"
+                        fi ;;
+                esac
+            fi
+        fi
+
+    else
+        # New file path provided — validate it
+        case "$_pricing_input" in
+            "~")   _pricing_input="$HOME" ;;
+            "~/"*) _pricing_input="$HOME/${_pricing_input:2}" ;;
+        esac
+        local _pext; _pext="$(echo "${_pricing_input##*.}" | tr '[:upper:]' '[:lower:]')"
+
+        if [[ ! -f "$_pricing_input" ]]; then
+            echo -e "${YELLOW}⚠️  File not found — path saved. Correct it later if needed.${NC}"
+        else
+            # Validate column structure
+            echo -e "   Validating file structure..."
+            local _valid=true _reason=""
+            case "$_pext" in
+                csv|tsv)
+                    local _first_data _delim=','
+                    # Skip leading blank/group-header rows to get first real data row
+                    _first_data=$(grep -v '^[[:space:]]*,' "$_pricing_input" | awk 'NR>1{print;exit}')
+                    [[ "$_first_data" == *$'\t'* ]] && _delim=$'\t'
+                    local _col_count
+                    _col_count=$(echo "$_first_data" | awk -F"$_delim" '{print NF}')
+                    if (( _col_count < 2 )); then
+                        _valid=false
+                        _reason="Only ${_col_count} column(s) found — need at least 2."
+                    else
+                        # Detect Layout B (operation-row format) by scanning cols 2-4
+                        local _op_col=0 _ci _oval
+                        for _ci in 2 3 4; do
+                            _oval=$(echo "$_first_data" | awk -F"$_delim" -v c="$_ci" '{print $c}' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+                            case "$_oval" in
+                                create|register|registration|renew|renewal|update|transfer|restore|trade)
+                                    _op_col=$_ci; break ;;
+                            esac
+                        done
+
+                        if [[ $_op_col -gt 0 ]]; then
+                            # Layout B — verify a numeric price column exists after op col
+                            local _pcol=$(( _op_col + 1 ))
+                            local _price_val
+                            _price_val=$(echo "$_first_data" | awk -F"$_delim" -v c="$_pcol" '{print $c}')
+                            if [[ "$_price_val" =~ [0-9] ]]; then
+                                echo -e "   ${GREEN}ℹ️  Detected Layout B (operation-row format):${NC} TLD | ... | Operation | Price"
+                                # also check we can find at least one create and one renew row
+                                local _has_create _has_renew
+                                _has_create=$(awk -F"$_delim" -v c="$_op_col" 'NR>1{v=tolower($c); gsub(/ /,"",v); if(v=="create"||v=="register"||v=="registration") {print "yes"; exit}}' "$_pricing_input")
+                                _has_renew=$(awk  -F"$_delim" -v c="$_op_col" 'NR>1{v=tolower($c); gsub(/ /,"",v); if(v=="renew"||v=="renewal") {print "yes"; exit}}' "$_pricing_input")
+                                [[ -z "$_has_create" ]] && echo -e "   ${YELLOW}⚠️  No 'create' rows found — registration prices will be empty.${NC}"
+                                [[ -z "$_has_renew"  ]] && echo -e "   ${YELLOW}⚠️  No 'renew' rows found — renewal prices will be empty.${NC}"
+                            else
+                                _valid=false
+                                _reason="Layout B detected but price column (col ${_pcol}) doesn't appear numeric."
+                            fi
+                        else
+                            # Layout A — cols 1=TLD, 2=reg price, 3=renew price
+                            local _c1 _c2 _c3
+                            IFS="$_delim" read -r _c1 _c2 _c3 _ <<< "$_first_data"
+                            _c1="${_c1// /}"; _c2="${_c2// /}"; _c3="${_c3// /}"
+                            echo -e "   ${GREEN}ℹ️  Detected Layout A (simple 3-column format):${NC} TLD | Registration | Renewal"
+                            if [[ -z "$_c1" ]]; then
+                                _valid=false; _reason="Column 1 (TLD) appears empty."
+                            elif [[ ! "$_c2" =~ [0-9] ]] && [[ -n "$_c2" ]]; then
+                                _valid=false; _reason="Column 2 (Registration) doesn't appear to contain a price."
+                            elif [[ ! "$_c3" =~ [0-9] ]] && [[ -n "$_c3" ]]; then
+                                _valid=false; _reason="Column 3 (Renewal) doesn't appear to contain a price."
+                            fi
+                        fi
+                    fi ;;
+                xlsx|xls)
+                    echo -e "   ${YELLOW}⚠️  XLS/XLSX is no longer supported. Please convert to CSV or TSV.${NC}"
+                    _valid=false; _reason="Unsupported file format. Use .csv or .tsv." ;;
+            esac
+
+            if [[ "$_valid" == true ]]; then
+                echo -e "   ${GREEN}✅ File structure looks good.${NC}"
+            else
+                echo -e "   ${RED}❗ Validation failed: ${_reason}${NC}"
+                echo -e "   Expected columns: ${YELLOW}TLD | Registration price | Renewal price${NC}"
+                echo -en "   Save path anyway? [y/N]: "
+                read -r _force_ans
+                [[ ! "$_force_ans" =~ ^[Yy]$ ]] && {
+                    echo -e "   ${YELLOW}Pricing file not saved. Using previous setting.${NC}"
+                    if [[ -n "${PRICING_FILE:-}" ]]; then
+                        pricing_line="PRICING_FILE=\"${PRICING_FILE}\""
+                    fi
+                    _pricing_input=""
+                }
+            fi
+        fi
+
+        if [[ -n "$_pricing_input" ]]; then
+                pricing_line="PRICING_FILE=\"${_pricing_input}\""
+        fi
+    fi
+
+    # ── Write config ──────────────────────────────────────────────────────
+    {
+        echo "# domains.sh personal configuration"
+        echo "# Generated: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "SETUP_DONE=true"
+        echo ""
+        echo "DEFAULT_TLDS=("
+        for _t in "${new_tlds[@]}"; do echo "    $_t"; done
+        echo ")"
+        echo ""
+        echo "$pricing_line"
+    } > "$CONFIG_FILE"
+
+    source "$CONFIG_FILE"
+
+    echo ""
+    echo -e "${GREEN}✅ Setup complete!${NC} Config saved to: ${YELLOW}${CONFIG_FILE}${NC}"
+    echo -e "   Re-run anytime: ${GREEN}$(basename "$0") --setup${NC}"
+    echo ""
+}
+
+# ── Install script to system / user bin ───────────────────────────────────────
+do_install() {
+    local os; os=$(detect_os)
+    local script_src
+    script_src="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/$(basename "${BASH_SOURCE[0]:-$0}")"
+    local install_name="domains"
+
+    echo ""
+    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}   domains.sh — Installer${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+    echo -e "   OS detected: ${YELLOW}${os}${NC}"
+    echo ""
+
+    # Candidate directories, ordered by preference
+    local candidates=()
+    case "$os" in
+        macos|linux|wsl) candidates=("/usr/local/bin" "$HOME/.local/bin" "$HOME/bin") ;;
+        windows)         candidates=("$HOME/bin" "/usr/local/bin") ;;
+        *)               candidates=("$HOME/.local/bin" "$HOME/bin") ;;
+    esac
+
+    # Find first writable or creatable directory
+    local target_dir=""
+    for _d in "${candidates[@]}"; do
+        if [[ -d "$_d" && -w "$_d" ]]; then
+            target_dir="$_d"; break
+        elif [[ ! -d "$_d" ]] && mkdir -p "$_d" 2>/dev/null; then
+            target_dir="$_d"; break
+        fi
+    done
+
+    # Fall back: offer sudo for /usr/local/bin
+    if [[ -z "$target_dir" && -d "/usr/local/bin" ]]; then
+        echo -e "   ${YELLOW}/usr/local/bin${NC} requires elevated access."
+        echo -en "   Install there using sudo? [Y/n]: "
+        read -r _sudo_ans
+        if [[ ! "$_sudo_ans" =~ ^[Nn]$ ]]; then
+            target_dir="/usr/local/bin"
+        else
+            target_dir="$HOME/.local/bin"
+            mkdir -p "$target_dir"
+        fi
+    fi
+
+    [[ -z "$target_dir" ]] && { target_dir="$HOME/.local/bin"; mkdir -p "$target_dir"; }
+
+    local target="${target_dir}/${install_name}"
+    echo -e "   Installing ${GREEN}${install_name}${NC} → ${YELLOW}${target}${NC}"
+
+    local _copy_ok=0
+    if [[ "$target_dir" == "/usr/local/bin" && ! -w "$target_dir" ]]; then
+        sudo cp "$script_src" "$target" && sudo chmod +x "$target" && _copy_ok=1
+    else
+        cp "$script_src" "$target" && chmod +x "$target" && _copy_ok=1
+    fi
+
+    if [[ $_copy_ok -eq 1 ]]; then
+        echo -e "   ${GREEN}✅ Installed successfully.${NC}"
+        if [[ ":$PATH:" != *":${target_dir}:"* ]]; then
+            echo ""
+            echo -e "   ${YELLOW}⚠️  ${target_dir} is not in your \$PATH.${NC}"
+            echo -e "   Add this to your shell profile (~/.zshrc, ~/.bashrc, etc.):"
+            echo -e "   ${GREEN}export PATH=\"\$PATH:${target_dir}\"${NC}"
+        fi
+    else
+        echo -e "   ${RED}❗ Installation failed.${NC}"
+        exit 1
+    fi
+
+    # ── Install shell completions ─────────────────────────────────────────
+    install_completions "$install_name"
+
+    run_setup
+    exit 0
+}
+
+# ── Install tab-completion scripts for zsh and bash ───────────────────────────
+install_completions() {
+    local cmd="${1:-domains}"
+    echo ""
+    echo -e "   ${YELLOW}Installing shell completions...${NC}"
+
+    # ── zsh ───────────────────────────────────────────────────────────────
+    local zsh_comp_dir="$HOME/.zsh/completions"
+    mkdir -p "$zsh_comp_dir"
+    cat > "${zsh_comp_dir}/_${cmd}" << 'ZSHCOMP'
+#compdef domains
+
+_domains() {
+    _arguments -s \
+        '(- *)'{-h,--help}'[Show help and exit]' \
+        '(-e --extended)'{-e,--extended}'[Extended output with full details]' \
+        '(-o --options)'{-o,--options}'[Prompt to choose TLDs to check]' \
+        '--install[Install to system bin and run setup wizard]' \
+        '--setup[Re-run the setup wizard]' \
+        '--update[Pull the latest version from GitHub]' \
+        '1:domain name:()'
+}
+
+_domains "$@"
+ZSHCOMP
+
+    # Add ~/.zsh/completions to fpath if not already there
+    local zshrc="$HOME/.zshrc"
+    local fpath_line='fpath=(~/.zsh/completions $fpath)'
+    local compinit_line='autoload -Uz compinit && compinit'
+    if [[ -f "$zshrc" ]]; then
+        if ! grep -qF "$fpath_line" "$zshrc" 2>/dev/null; then
+            {   echo ""
+                echo "# domains shell completion"
+                echo "$fpath_line"
+                echo "$compinit_line"
+            } >> "$zshrc"
+            echo -e "   ${GREEN}✅ zsh:${NC} completion installed → ${zsh_comp_dir}/_${cmd}"
+            echo -e "      Added fpath entry to ${YELLOW}~/.zshrc${NC}"
+        else
+            echo -e "   ${GREEN}✅ zsh:${NC} completion updated → ${zsh_comp_dir}/_${cmd}"
+        fi
+    else
+        echo -e "   ${GREEN}✅ zsh:${NC} completion file written → ${zsh_comp_dir}/_${cmd}"
+        echo -e "      ${YELLOW}Add to ~/.zshrc:${NC} $fpath_line"
+    fi
+
+    # ── bash ──────────────────────────────────────────────────────────────
+    local bash_comp_dir="$HOME/.bash_completion.d"
+    mkdir -p "$bash_comp_dir"
+    cat > "${bash_comp_dir}/${cmd}" << 'BASHCOMP'
+_domains_completion() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local opts="-o --options -e --extended -h --help --install --setup --update"
+    COMPREPLY=($(compgen -W "$opts" -- "$cur"))
+}
+complete -F _domains_completion domains
+BASHCOMP
+
+    local bashrc="$HOME/.bashrc"
+    local source_line="source \"\$HOME/.bash_completion.d/${cmd}\""
+    if [[ -f "$bashrc" ]] && ! grep -qF "$source_line" "$bashrc" 2>/dev/null; then
+        {   echo ""
+            echo "# domains shell completion"
+            echo "$source_line"
+        } >> "$bashrc"
+        echo -e "   ${GREEN}✅ bash:${NC} completion installed → ${bash_comp_dir}/${cmd}"
+        echo -e "      Added source line to ${YELLOW}~/.bashrc${NC}"
+    else
+        echo -e "   ${GREEN}✅ bash:${NC} completion file written → ${bash_comp_dir}/${cmd}"
+    fi
+
+    echo ""
+    echo -e "   ${YELLOW}ℹ️  Restart your terminal (or run: exec \$SHELL) to activate completion.${NC}"
+}
+
+
+# ── Self-update from GitHub ────────────────────────────────────────────────────
+do_update() {
+    local repo_url="https://raw.githubusercontent.com/lohmancorp/domains/main/domains.sh"
+    local script_src
+    script_src="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/$(basename "${BASH_SOURCE[0]:-$0}")"
+
+    echo ""
+    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}   domains — Self-Update${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+    echo -e "   Source: ${YELLOW}${repo_url}${NC}"
+    echo ""
+
+    if ! command -v curl &>/dev/null; then
+        echo -e "${RED}❗ Error:${NC} 'curl' is required for updates."
+        exit 1
+    fi
+
+    # Download to a temp file
+    local tmpfile; tmpfile=$(mktemp /tmp/domains_update_XXXXXX.sh)
+    echo -en "   Downloading latest version... "
+    local http_code
+    http_code=$(curl -fsSL -w "%{http_code}" -o "$tmpfile" "$repo_url" 2>/dev/null)
+
+    if [[ "$http_code" != "200" ]] || [[ ! -s "$tmpfile" ]]; then
+        echo -e "${RED}failed.${NC}"
+        echo -e "   ${RED}❗ Could not download update (HTTP ${http_code:-no response}).${NC}"
+        rm -f "$tmpfile"
+        exit 1
+    fi
+    echo -e "${GREEN}done.${NC}"
+
+    # Verify it looks like a valid bash script
+    if ! bash -n "$tmpfile" 2>/dev/null; then
+        echo -e "   ${RED}❗ Downloaded file failed syntax check — aborting update.${NC}"
+        rm -f "$tmpfile"
+        exit 1
+    fi
+
+    # Back up current script
+    local backup="${script_src}.backup"
+    cp "$script_src" "$backup"
+    echo -e "   Backup saved: ${YELLOW}${backup}${NC}"
+
+    # Replace current script
+    chmod +x "$tmpfile"
+    if cp "$tmpfile" "$script_src" && chmod +x "$script_src"; then
+        echo -e "   ${GREEN}✅ Updated successfully:${NC} ${script_src}"
+    else
+        echo -e "   ${RED}❗ Could not write to ${script_src} — try with sudo.${NC}"
+        sudo cp "$tmpfile" "$script_src" && sudo chmod +x "$script_src"             && echo -e "   ${GREEN}✅ Updated via sudo.${NC}"
+    fi
+
+    # Also update any installed copy in PATH
+    local installed; installed=$(command -v domains 2>/dev/null)
+    if [[ -n "$installed" && "$installed" != "$script_src" ]]; then
+        echo -en "   Also update installed copy at ${YELLOW}${installed}${NC}? [Y/n]: "
+        read -r _updans
+        if [[ ! "$_updans" =~ ^[Nn]$ ]]; then
+            if [[ -w "$installed" ]]; then
+                cp "$tmpfile" "$installed" && chmod +x "$installed"                     && echo -e "   ${GREEN}✅ Installed copy updated.${NC}"
+            else
+                sudo cp "$tmpfile" "$installed" && sudo chmod +x "$installed"                     && echo -e "   ${GREEN}✅ Installed copy updated via sudo.${NC}"
+            fi
+        fi
+    fi
+
+    rm -f "$tmpfile"
+    echo ""
+    echo -e "   Run ${GREEN}domains --version${NC} to confirm (if version info is included in the script)."
+    echo ""
+    exit 0
+}
 
 # ── Pricing data (TLD|registration|renewal) ──────────────────────────────────
 # Stored as one record per line: TLD|REG|RENEW
@@ -683,6 +1180,130 @@ PRICING_DATA=$(cat <<'EOF'
 EOF
 )
 
+# ── External pricing file loader ──────────────────────────────────────────────
+# Called once after the built-in PRICING_DATA is defined.
+# When PRICING_FILE is set and valid, it replaces PRICING_DATA entirely.
+load_pricing_file() {
+    [[ -z "${PRICING_FILE:-}" ]] && return 0   # feature not enabled
+
+    if [[ ! -f "$PRICING_FILE" ]]; then
+        echo -e "${RED}❗ Error:${NC} PRICING_FILE not found: $PRICING_FILE" >&2
+        exit 1
+    fi
+
+    local ext="${PRICING_FILE##*.}"
+    ext="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
+    local loaded=""
+
+    # Helper: strip any currency symbol / whitespace, keep only digits . and ,
+    # e.g.  "$ 12.00"  "12,58 €"  "12.00$"  -> "12.00" / "12,58" / "12.00"
+    _clean_price() {
+        echo "$1" | sed 's/[^0-9.,]//g'
+    }
+
+    case "$ext" in
+        csv|tsv)
+            # ── Smart CSV/TSV loader — pure bash + awk, no python3 needed ────
+            # Detects two layouts automatically:
+            #   Layout A: TLD | Registration | Renewal   (simple 3-col)
+            #   Layout B: TLD | [Years] | Operation | Price | ...
+            #             create/register → reg price;  renew/renewal → renewal price
+
+            # Detect delimiter from first real data line (skip blank/header lines)
+            local _delim=',' _first_real
+            _first_real=$(grep -v '^[[:space:]]*,' "$PRICING_FILE" | awk 'NR>1{print;exit}')
+            [[ "$_first_real" == *$'\t'* ]] && _delim=$'\t'
+
+            # Find which column (2 or 3) contains operation keywords
+            # Strip UTF-8 BOM (\xEF\xBB\xBF) that Excel/some editors add to CSV headers
+            local _op_col=0
+            while IFS="$_delim" read -r _f1 _f2 _f3 _rest; do
+                [[ -z "$_f1" ]] && continue
+                # Strip BOM from first field, then lowercase
+                _f1l=$(echo "$_f1" | sed 's/^\xEF\xBB\xBF//' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+                # Skip any row that looks like a header (known column label words)
+                case "$_f1l" in
+                    tld|domain|extension|"")
+                        continue ;;
+                esac
+                _f2l=$(echo "$_f2" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+                _f3l=$(echo "$_f3" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+                # If col2 or col3 looks like a header label, not an op keyword, skip row
+                case "$_f2l" in register|registration|renewal|price|operation|years|op|action) continue ;; esac
+                case "$_f3l" in register|registration|renewal|price|operation|years|op|action) continue ;; esac
+                # Now check for actual operation values
+                case "$_f2l" in
+                    create|renew|update|transfer|restore|trade)
+                        _op_col=2; break ;;
+                esac
+                case "$_f3l" in
+                    create|renew|update|transfer|restore|trade)
+                        _op_col=3; break ;;
+                esac
+                break
+            done < "$PRICING_FILE"
+
+            if [[ $_op_col -gt 0 ]]; then
+                # Layout B: operation-row format
+                local _pcol=$(( _op_col + 1 ))
+                loaded=$(awk -v FS="$_delim" -v opcol="$_op_col" -v pcol="$_pcol" '
+                    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+                    function clean(s) { gsub(/[^0-9.,]/, "", s); return s }
+                    function normtld(t) { return (substr(t,1,1)!=".") ? "." t : t }
+                    NR==1 { next }
+                    NF < pcol { next }
+                    {
+                        tld=trim($1)
+                        if (tld=="" || tolower(tld)=="tld" || tolower(tld)=="domain") next
+                        if (substr(tld,1,1)==",") next
+                        tld=normtld(tld)
+                        op=tolower(trim($opcol)); price=clean(trim($pcol))
+                        if (op=="create"||op=="register"||op=="registration") {
+                            if (!reg[tld]) reg[tld]=price
+                        } else if (op=="renew"||op=="renewal") {
+                            if (!ren[tld]) ren[tld]=price
+                        }
+                    }
+                    END {
+                        for (t in reg) { n=(ren[t]?ren[t]:""); print t "|" reg[t] "|" n }
+                        for (t in ren) { if (!reg[t]) print t "||" ren[t] }
+                    }
+                ' "$PRICING_FILE")
+
+            else
+                # Layout A: simple 3-col format — strip BOM, skip header, output tld|reg|renew
+                loaded=$(sed 's/^\xEF\xBB\xBF//' "$PRICING_FILE" | awk -v FS="$_delim" '
+                    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+                    function clean(s) { gsub(/[^0-9.,]/, "", s); return s }
+                    NR==1 { next }
+                    NF>=2 && $1!="" {
+                        tld=trim($1); reg=clean(trim($2)); renew=clean(trim($3))
+                        if (tld=="" || substr(tld,1,1)==",") next
+                        if (tolower(tld)=="tld"||tolower(tld)=="domain"||tolower(tld)=="extension") next
+                        if (substr(tld,1,1)!=".") tld="." tld
+                        if (tld!=".") print tld "|" reg "|" renew
+                    }
+                ')
+            fi
+            ;;
+        *)
+            echo -e "${RED}❗ Error:${NC} Unsupported file type: .$ext  (use .csv or .tsv)" >&2
+            exit 1
+            ;;
+    esac
+
+    if [[ -z "$loaded" ]]; then
+        echo -e "${YELLOW}⚠️  Warning:${NC} PRICING_FILE loaded but contained no usable rows. Using built-in data." >&2
+        return 0
+    fi
+
+    PRICING_DATA="$loaded"
+    #echo -e "${GREEN}ℹ️  Pricing loaded from:${NC} $PRICING_FILE" >&2
+}
+
+# Run loader (no-op when PRICING_FILE is not set)
+load_pricing_file
+
 # ── Helper: look up pricing for a domain ─────────────────────────────────────
 # Sorts TLD candidates longest-first so .co.uk matches before .uk, etc.
 get_pricing() {
@@ -711,32 +1332,41 @@ is_valid_tld() {
 }
 
 # ── check_domain ─────────────────────────────────────────────────────────────
+# Uses RDAP (rdap.org) instead of whois.
 check_domain() {
     local domain="$1"
-    local show_full="$2"  # "true" or ""
-    local extended="$3"   # "true" = verbose; default (empty) = compact
+    local extended="$2"   # "true" = verbose; default (empty) = compact
 
-    # Ensure whois is installed
-    if ! command -v whois &>/dev/null; then
-        echo -e "${RED}❗ Error:${NC} 'whois' is not installed. Please install it first (e.g., 'sudo apt install whois' or 'brew install whois')."
+    # Ensure curl is installed
+    if ! command -v curl &>/dev/null; then
+        echo -e "${RED}❗ Error:${NC} 'curl' is not installed. Please install it first."
         exit 1
     fi
 
-    # Run whois (combine stdout + stderr)
-    local output
-    output=$(whois "$domain" 2>&1)
+    # Query RDAP (rdap.org follows IANA bootstrap; -L follows redirects)
+    local rdap_url="https://rdap.org/domain/${domain}"
+    local raw http_code output
 
-    if [[ "$show_full" == "true" ]]; then
-        echo "$output"
-        echo -e "${NC}----------------------------------------"
+    # ── Inner query helper — called once (and again on 429) ──────────────
+    _do_rdap_query() {
+        raw=$(curl -sL -w "\n__HTTP_CODE__:%{http_code}" "$rdap_url" 2>/dev/null)
+        http_code=$(printf '%s' "$raw" | grep -o '__HTTP_CODE__:[0-9]*' | cut -d: -f2)
+        output=$(printf '%s' "$raw" | sed '/^__HTTP_CODE__:/d')
+    }
+
+    _do_rdap_query
+
+    # Handle rate limiting (HTTP 429 or RDAP servers that return 503/429 body)
+    if [[ "$http_code" == "429" || "$http_code" == "503" ]]; then
+        echo -e "${YELLOW}⏳ Rate limited by RDAP server for ${domain}. Waiting 5 seconds...${NC}" >&2
+        sleep 5
+        _do_rdap_query
     fi
 
-    # Pattern matching (case-insensitive via grep -i)
-    local available_pattern="no match|not found|no data found|no entries found|status:[[:space:]]*available|status:[[:space:]]*free|is available|is free"
-    local error_pattern="rate limit|connection refused|timeout|connection reset"
+    # HTTP 404 → domain available; 200 → taken; anything else → error
+    if [[ "$http_code" == "404" ]]; then
 
-    if echo "$output" | grep -qiE "$available_pattern"; then
-        # Look up pricing
+        # ── AVAILABLE ────────────────────────────────────────────────────────
         local pricing
         pricing=$(get_pricing "$domain")
 
@@ -766,20 +1396,67 @@ check_domain() {
             fi
         fi
 
-    elif echo "$output" | grep -qiE "$error_pattern"; then
-        echo -e "${YELLOW}⚠️ ERROR:${NC} WHOIS server rate limit exceeded or connection failed for ${domain}. Try again later."
-        exit 1
+    elif [[ "$http_code" == "200" ]]; then
+        # ── TAKEN ────────────────────────────────────────────────────────────
 
-    else
+        # Guard: some RDAP upstreams return HTTP 200 with a rate-limit HTML/text
+        # body instead of JSON. Detect this and retry once after a pause.
+        local _first_char
+        _first_char=$(printf '%s' "$output" | head -c1)
+        if [[ "$_first_char" != "{" && "$_first_char" != "[" ]]; then
+            echo -e "${YELLOW}⏳ Unexpected response for ${domain} (possible rate limit). Waiting 5 seconds...${NC}" >&2
+            sleep 5
+            _do_rdap_query
+            _first_char=$(printf '%s' "$output" | head -c1)
+            if [[ "$_first_char" != "{" && "$_first_char" != "[" ]]; then
+                echo -e "${YELLOW}⚠️  Could not get valid RDAP data for ${domain}. Skipping detail parse.${NC}" >&2
+                echo -e "${RED}❌${NC} - TAKEN: ${domain}"
+                echo "0"
+                return
+            fi
+        fi
+
         if [[ "$extended" != "true" ]]; then
             echo -e "${RED}❌${NC} - TAKEN: ${domain}"
         else
             printf '\033[0;31m❌ TAKEN:\033[0m \033]8;;http://%s\a%s\033]8;;\a\n' "$domain" "$domain"
 
+            # Parse RDAP JSON using python3 (handles nested vcard + events array)
             local registrar updated expiry
-            registrar=$(echo "$output" | grep -iE "^(Registrar|Registrar Name):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
-            updated=$(echo "$output"   | grep -iE "^(Updated Date|last-updated|Modified|Last Updated):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
-            expiry=$(echo "$output"    | grep -iE "^(Registry Expiry Date|Expiration Date|Expiry date|paid-till|Valid Until):" | head -1 | sed 's/^[^:]*:[[:space:]]*//')
+            registrar=$(printf '%s' "$output" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit()
+for ent in d.get('entities', []):
+    if 'registrar' in ent.get('roles', []):
+        vcard = ent.get('vcardArray', [])
+        if len(vcard) > 1:
+            for item in vcard[1]:
+                if item[0] == 'fn':
+                    print(item[3]); sys.exit()
+" 2>/dev/null)
+            updated=$(printf '%s' "$output" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit()
+for ev in d.get('events', []):
+    if ev.get('eventAction','').lower() == 'last changed':
+        print(ev.get('eventDate','')); sys.exit()
+" 2>/dev/null)
+            expiry=$(printf '%s' "$output" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit()
+for ev in d.get('events', []):
+    if ev.get('eventAction','').lower() in ('expiration','expires'):
+        print(ev.get('eventDate','')); sys.exit()
+" 2>/dev/null)
 
             [[ -n "$registrar" ]] && echo -e "   ${YELLOW}Registrar:${NC} $registrar"
             [[ -n "$updated"   ]] && echo -e "   ${YELLOW}Last Update:${NC} $updated"
@@ -804,30 +1481,46 @@ check_domain() {
         fi
 
         echo "0"
+
+    else
+        # ── ERROR / UNEXPECTED ────────────────────────────────────────────────
+        echo -e "${YELLOW}⚠️ ERROR:${NC} RDAP lookup failed for ${domain} (HTTP ${http_code:-no response}). Try again later."
+        exit 1
     fi
 }
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 usage() {
-    echo "Usage: $(basename "$0") <domain> [-o] [-e] [-f]"
-    echo "  -o   Prompt for TLD options (pre-filled with defaults from CONFIG)"
-    echo "  -e   Extended output — show full details with spacing (default is compact)"
-    echo "  -f   Show full raw whois output"
+    echo "Usage: $(basename "$0") <domain> [-o] [-e]"
+    echo "  -o   Prompt for TLD options (pre-filled with your defaults)"
+    echo "  -e   Extended output — full details with spacing"
+    echo ""
+    echo "  --install   Install script to system bin and run setup wizard"
+    echo "  --setup     Re-run the setup wizard (update defaults / pricing file)"
+    echo "  --update    Pull the latest version from GitHub"
     exit 1
 }
 
-SHOW_FULL=""
+# Handle --install / --setup / --update before standard argument loop (no domain required)
+for _pre_arg in "$@"; do
+    case "$_pre_arg" in
+        --install) do_install ;;   # do_install calls exit 0
+        --setup)   run_setup; exit 0 ;;
+        --update)  do_update ;;    # do_update calls exit 0
+    esac
+done
+
 OPTIONS=""
 EXTENDED=""
 PRIMARY_DOMAIN=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -f|--full)     SHOW_FULL="true" ;;
-        -o|--options)  OPTIONS="true" ;;
-        -e|--extended) EXTENDED="true" ;;
-        -h|--help)     usage ;;
-        -*)            echo -e "${RED}❗ Error:${NC} Unknown option: $1"; usage ;;
+        -o|--options)   OPTIONS="true" ;;
+        -e|--extended)  EXTENDED="true" ;;
+        --install|--setup|--update) : ;;   # already handled above
+        -h|--help)      usage ;;
+        -*)             echo -e "${RED}❗ Error:${NC} Unknown option: $1"; usage ;;
         *)
             if [[ -z "$PRIMARY_DOMAIN" ]]; then
                 PRIMARY_DOMAIN="$1"
@@ -843,16 +1536,26 @@ if [[ -z "$PRIMARY_DOMAIN" ]]; then
     usage
 fi
 
-# -f and -o cannot be used together
-if [[ "$SHOW_FULL" == "true" && "$OPTIONS" == "true" ]]; then
-    echo -e "${RED}⚠️ Error:${NC} The -f/--full option cannot be used alongside the -o/--options option."
-    exit 1
-fi
-
-# -f and -e cannot be used together
-if [[ "$SHOW_FULL" == "true" && "$EXTENDED" == "true" ]]; then
-    echo -e "${RED}⚠️ Error:${NC} The -f/--full option cannot be used alongside the -e/--extended option."
-    exit 1
+# ── First-run detection ───────────────────────────────────────────────────────
+# If no personal config exists, this user hasn't done setup yet.
+# Offer the wizard but don't block the query if they decline.
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo -e "${YELLOW}👋 Welcome! Looks like this is your first time running the domains tool.${NC}"
+    echo -en "   Run the setup wizard now? [Y/n]: "
+    read -r _first_ans
+    if [[ ! "$_first_ans" =~ ^[Nn]$ ]]; then
+        run_setup
+        # Reload pricing if PRICING_FILE was configured during setup
+        [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+        load_pricing_file
+    else
+        # Write minimal config so this prompt doesn't repeat
+        mkdir -p "$(dirname "$CONFIG_FILE")"
+        {   echo "# domains personal configuration"
+            echo "SETUP_DONE=true"
+            echo "# Run: $(basename "$0") --setup   to configure at any time"
+        } > "$CONFIG_FILE"
+    fi
 fi
 
 # ── Validate primary domain TLD ───────────────────────────────────────────────
@@ -924,21 +1627,23 @@ if [[ "$OPTIONS" == "true" ]]; then
 fi
 
 # ── Guards & rate limiting ────────────────────────────────────────────────────
+# RDAP rate limit: never exceed 10 requests per 11 seconds.
+#   1–6  domains → 500 ms between requests  (≤ 12 req/11 s, safe with margin)
+#   7–20 domains → 1100 ms between requests (≤ 10 req/11 s, exact limit)
+#   21+  domains → refuse (too risky)
 total_domains="${#domains_to_check[@]}"
 
 echo ""  # blank line before first result
 
 if (( total_domains > 20 )); then
-    echo -e "\n  ${RED}🛑 Dude, bro, you're going to get blocked.${NC} Maximum of 20 domains at once!!\n"
+    echo -e "\n  ${RED}🛑 Too many domains.${NC} Please limit to 20 at a time to avoid hitting the RDAP rate limit.\n"
     exit 1
 fi
 
-if (( total_domains <= 5 )); then
+if (( total_domains <= 6 )); then
     delay=0.5
-elif (( total_domains <= 10 )); then
-    delay=1.5
 else
-    delay=2.5
+    delay=1.1
 fi
 
 # ── Run checks ────────────────────────────────────────────────────────────────
@@ -948,7 +1653,7 @@ for (( i=0; i<total_domains; i++ )); do
     domain="${domains_to_check[$i]}"
 
     # Capture output — last line is the numeric cost (or 0)
-    raw_output=$(check_domain "$domain" "$SHOW_FULL" "$EXTENDED")
+    raw_output=$(check_domain "$domain" "$EXTENDED")
     cost=$(echo "$raw_output" | tail -1)
     display=$(echo "$raw_output" | sed '$d')
 
@@ -967,9 +1672,10 @@ done
 # ── Summary ───────────────────────────────────────────────────────────────────
 if (( $(echo "$total_cost > 0" | bc -l) )); then
     if [[ "$EXTENDED" == "true" ]]; then
-        printf "\n${GREEN}💰 Your potential spend is:${NC} %.2f €\n\n" "$total_cost"
+        printf "\n${GREEN}💰 Your potential spend is:${NC} %.2f \n\n" "$total_cost"
     else
-        printf "${GREEN}💰${NC} - Spend: %.2f €\n" "$total_cost"
+        printf "${GREEN}💰${NC} - Spend: %.2f \n" "$total_cost" 
+        printf "\n"
     fi
 else
     [[ "$EXTENDED" == "true" ]] && echo ""
