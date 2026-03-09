@@ -2,7 +2,7 @@
 # domains — Check domain availability with pricing info and provides registration info if a domain is taken.
 # Usage: ./domains.sh <domain> [-o] [-e]
 
-VERSION="2.0.1"
+VERSION="2.0.2"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
