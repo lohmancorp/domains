@@ -2,7 +2,7 @@
 # domains — Check domain availability with pricing info and provides registration info if a domain is taken.
 # Usage: ./domains.sh <domain> [-o] [-e]
 
-VERSION="2.0.2"
+VERSION="2.0.3"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
@@ -465,33 +465,19 @@ do_update() {
         exit 1
     fi
 
-    # ── Check remote version before downloading ───────────────────────────
-    echo -en "   Checking remote version... "
-    local remote_ver
-    remote_ver=$(curl -fsSL --range 0-512 "$repo_url" 2>/dev/null | grep -m1 '^VERSION=' | cut -d'"' -f2)
 
-    if [[ -z "$remote_ver" ]]; then
-        echo -e "${YELLOW}(could not determine remote version)${NC}"
-    elif [[ "$remote_ver" == "$VERSION" ]]; then
-        echo -e "${GREEN}v${remote_ver}${NC}"
-        echo ""
-        echo -e "   ${YELLOW}ℹ️  Already up to date (v${VERSION}).${NC}"
-        echo -en "   Download and reinstall anyway? [y/N]: "
-        read -r _force_update
-        if [[ ! "$_force_update" =~ ^[Yy]$ ]]; then
-            echo -e "   No changes made."
-            exit 0
-        fi
-    else
-        echo -e "${GREEN}v${remote_ver}${NC}  (you have v${VERSION})"
-    fi
-    echo ""
+    # Download to a temp file first — version check reads from the file, not a
+    # separate request, so we never get a stale CDN-cached partial response.
 
     # Download to a temp file
     local tmpfile; tmpfile=$(mktemp /tmp/domains_update_XXXXXX.sh)
     echo -en "   Downloading latest version... "
     local http_code
-    http_code=$(curl -fsSL -w "%{http_code}" -o "$tmpfile" "$repo_url" 2>/dev/null)
+    # Cache-Control headers bypass GitHub's CDN cache so we always get the latest
+    http_code=$(curl -fsSL \
+        -H "Cache-Control: no-cache" \
+        -H "Pragma: no-cache" \
+        -w "%{http_code}" -o "$tmpfile" "$repo_url" 2>/dev/null)
 
     if [[ "$http_code" != "200" ]] || [[ ! -s "$tmpfile" ]]; then
         echo -e "${RED}failed.${NC}"
@@ -538,10 +524,15 @@ do_update() {
     fi
 
     rm -f "$tmpfile"
+    # Read the version from the file that was just written — $VERSION in memory is
+    # still the old version since the process hasn't reloaded.
+    local _installed_ver
+    _installed_ver=$(grep -m1 '^VERSION=' "$script_src" 2>/dev/null | cut -d'"' -f2)
     echo ""
-    echo -e "   Script version: ${GREEN}v${VERSION}${NC}"
+    echo -e "   Script version: ${GREEN}v${_installed_ver:-$VERSION}${NC}"
     echo ""
     exit 0
+
 }
 
 # ── Pricing data (TLD|registration|renewal) ──────────────────────────────────
