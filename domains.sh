@@ -2,10 +2,7 @@
 # domains — Check domain availability with pricing info and provides registration info if a domain is taken.
 # Usage: ./domains.sh <domain> [-o] [-e]
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ── Version Information ───────────────────────────────────────────────────────
-# Version 2.0
-# ══════════════════════════════════════════════════════════════════════════════
+VERSION="2.0"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
@@ -519,7 +516,7 @@ do_update() {
 
     rm -f "$tmpfile"
     echo ""
-    echo -e "   Run ${GREEN}domains --version${NC} to confirm (if version info is included in the script)."
+    echo -e "   Script version: ${GREEN}v${VERSION}${NC}"
     echo ""
     exit 0
 }
@@ -1503,12 +1500,14 @@ usage() {
     echo "  --install   Install script to system bin and run setup wizard"
     echo "  --setup     Re-run the setup wizard (update defaults / pricing file)"
     echo "  --update    Pull the latest version from GitHub"
+    echo "  --version   Show version and exit"
     exit 1
 }
 
-# Handle --install / --setup / --update before standard argument loop (no domain required)
+# Handle --install / --setup / --update / --version before standard argument loop
 for _pre_arg in "$@"; do
     case "$_pre_arg" in
+        --version) echo "domains v${VERSION}"; exit 0 ;;
         --install) do_install ;;   # do_install calls exit 0
         --setup)   run_setup; exit 0 ;;
         --update)  do_update ;;    # do_update calls exit 0
@@ -1523,7 +1522,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -o|--options)   OPTIONS="true" ;;
         -e|--extended)  EXTENDED="true" ;;
-        --install|--setup|--update) : ;;   # already handled above
+        --install|--setup|--update|--version) : ;;
         -h|--help)      usage ;;
         -*)             echo -e "${RED}❗ Error:${NC} Unknown option: $1"; usage ;;
         *)

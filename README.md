@@ -40,6 +40,7 @@ With `-e` (extended):
 - 🛑 Hard cap of 20 domains per run
 - 🔧 `--install` — OS-aware installer with tab-completion setup
 - 🔄 `--update` — self-update from GitHub
+- 🏷️ `--version` — show current version
 
 ---
 
@@ -111,7 +112,7 @@ domains --setup
 
 ```
 domains <domain> [-o] [-e]
-domains --install | --setup | --update
+domains --install | --setup | --update | --version
 ```
 
 | Flag | Description |
@@ -123,6 +124,7 @@ domains --install | --setup | --update
 | `--install` | Install to system bin, set up completions, run setup wizard |
 | `--setup` | Re-run the setup wizard (change TLD defaults or pricing file) |
 | `--update` | Pull the latest version from GitHub |
+| `--version` | Show version number and exit |
 
 ### Examples
 
